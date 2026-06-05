@@ -87,8 +87,8 @@ static std::vector<HotkeyItem> g_hotkeys = {
     {L"\"", L"查看当前护身符", L"status", VK_OEM_7, true, false, false},
     {L"*", L"查看装备清单", L"status", '8', true, false, false},
     {L"+", L"查看已学魔法", L"status", VK_OEM_PLUS, false, false, false},
-    {L":", L"查看当前位置", L"status", VK_OEM_1, false, false, false},
-    {L";", L"查看远方物品", L"status", VK_OEM_1, true, false, false},
+    {L":", L"查看当前位置", L"status", VK_OEM_1, true, false, false},
+    {L";", L"查看远方物品", L"status", VK_OEM_1, false, false, false},
 
     // 特殊动作
     {L"X", L"切换双持", L"special", 'X', true, false, false},
