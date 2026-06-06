@@ -12,9 +12,58 @@
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "kernel32.lib")
 
+static HFONT g_hFont = NULL;
+
+void CreateGlobalFont() {
+    NONCLIENTMETRICSW ncm;
+    ncm.cbSize = sizeof(NONCLIENTMETRICSW);
+    SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(NONCLIENTMETRICSW), &ncm, 0);
+    
+    g_hFont = CreateFontW(
+        ncm.lfMessageFont.lfHeight,
+        ncm.lfMessageFont.lfWidth,
+        ncm.lfMessageFont.lfEscapement,
+        ncm.lfMessageFont.lfOrientation,
+        ncm.lfMessageFont.lfWeight,
+        ncm.lfMessageFont.lfItalic,
+        ncm.lfMessageFont.lfUnderline,
+        ncm.lfMessageFont.lfStrikeOut,
+        ncm.lfMessageFont.lfCharSet,
+        ncm.lfMessageFont.lfOutPrecision,
+        ncm.lfMessageFont.lfClipPrecision,
+        ncm.lfMessageFont.lfQuality,
+        ncm.lfMessageFont.lfPitchAndFamily,
+        L"Segoe UI"
+    );
+    
+    if (!g_hFont) {
+        g_hFont = CreateFontW(
+            -12, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI"
+        );
+    }
+}
+
+void DeleteGlobalFont() {
+    if (g_hFont) {
+        DeleteObject(g_hFont);
+        g_hFont = NULL;
+    }
+}
+
+struct WindowInfo {
+    HWND hWnd;
+    std::wstring title;
+};
+
 struct FindWindowData {
     DWORD processId;
     HWND hWnd;
+};
+
+struct EnumWindowsData {
+    std::vector<WindowInfo>* windows;
 };
 
 BOOL CALLBACK FindWindowByProcessIdCallback(HWND hWnd, LPARAM lParam) {
@@ -34,6 +83,155 @@ HWND FindWindowByProcessId(DWORD processId) {
     data.hWnd = NULL;
     EnumWindows(FindWindowByProcessIdCallback, (LPARAM)&data);
     return data.hWnd;
+}
+
+BOOL CALLBACK EnumWindowsCallback(HWND hWnd, LPARAM lParam) {
+    EnumWindowsData* data = (EnumWindowsData*)lParam;
+    
+    if (IsWindowVisible(hWnd) && GetWindow(hWnd, GW_OWNER) == NULL) {
+        wchar_t title[512] = {0};
+        GetWindowTextW(hWnd, title, 512);
+        
+        if (wcslen(title) > 0) {
+            data->windows->push_back({hWnd, title});
+        }
+    }
+    return TRUE;
+}
+
+static HWND g_selectedWindow = NULL;
+BOOL CALLBACK EnumChildProc(HWND hWnd, LPARAM lParam);
+
+LRESULT CALLBACK SelectWindowWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
+    static HWND hList = NULL;
+    
+    switch (message) {
+    case WM_CREATE: {
+        g_selectedWindow = NULL;
+        
+        CREATESTRUCT* pCreate = (CREATESTRUCT*)lParam;
+        std::vector<WindowInfo>* pWindows = (std::vector<WindowInfo>*)pCreate->lpCreateParams;
+        
+        HINSTANCE hInst = (HINSTANCE)GetWindowLongPtr(hWnd, GWLP_HINSTANCE);
+        
+        hList = CreateWindowExW(0, L"LISTBOX", L"",
+            WS_VISIBLE | WS_CHILD | WS_BORDER | WS_VSCROLL | LBS_NOTIFY,
+            10, 10, 360, 180,
+            hWnd, (HMENU)1001, hInst, NULL);
+        
+        for (size_t i = 0; i < pWindows->size(); i++) {
+            int idx = (int)SendMessageW(hList, LB_ADDSTRING, 0, (LPARAM)(*pWindows)[i].title.c_str());
+            SendMessageW(hList, LB_SETITEMDATA, (WPARAM)idx, (LPARAM)(*pWindows)[i].hWnd);
+        }
+        
+        if (!pWindows->empty()) {
+            SendMessageW(hList, LB_SETCURSEL, (WPARAM)0, 0);
+        }
+        
+        CreateWindowExW(0, L"BUTTON", L"确定",
+            WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
+            100, 200, 90, 28,
+            hWnd, (HMENU)IDOK, hInst, NULL);
+        
+        CreateWindowExW(0, L"BUTTON", L"取消",
+            WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
+            200, 200, 90, 28,
+            hWnd, (HMENU)IDCANCEL, hInst, NULL);
+        
+        EnumChildWindows(hWnd, EnumChildProc, 0);
+        return 0;
+    }
+    
+    case WM_COMMAND: {
+        int wmId = LOWORD(wParam);
+        int wmEvent = HIWORD(wParam);
+        
+        if (wmId == IDOK) {
+            int sel = (int)SendMessageW(hList, LB_GETCURSEL, 0, 0);
+            if (sel != LB_ERR) {
+                g_selectedWindow = (HWND)SendMessageW(hList, LB_GETITEMDATA, (WPARAM)sel, 0);
+            }
+            DestroyWindow(hWnd);
+            return 0;
+        }
+        
+        if (wmId == IDCANCEL) {
+            DestroyWindow(hWnd);
+            return 0;
+        }
+        
+        if (wmId == 1001 && wmEvent == LBN_DBLCLK) {
+            int sel = (int)SendMessageW(hList, LB_GETCURSEL, 0, 0);
+            if (sel != LB_ERR) {
+                g_selectedWindow = (HWND)SendMessageW(hList, LB_GETITEMDATA, (WPARAM)sel, 0);
+            }
+            DestroyWindow(hWnd);
+            return 0;
+        }
+        break;
+    }
+    
+    case WM_DESTROY:
+        return 0;
+    
+    case WM_CLOSE:
+        DestroyWindow(hWnd);
+        return 0;
+    }
+    
+    return DefWindowProcW(hWnd, message, wParam, lParam);
+}
+
+HWND ShowWindowSelectionDialog(HWND hParent, HINSTANCE hInst) {
+    std::vector<WindowInfo> windows;
+    EnumWindowsData data;
+    data.windows = &windows;
+    EnumWindows(EnumWindowsCallback, (LPARAM)&data);
+    
+    if (windows.empty()) {
+        MessageBoxW(hParent, L"未找到任何窗口", L"提示", MB_OK);
+        return NULL;
+    }
+    
+    std::sort(windows.begin(), windows.end(), [](const WindowInfo& a, const WindowInfo& b) {
+        return a.title < b.title;
+    });
+    
+    WNDCLASSEXW wc = {0};
+    wc.cbSize = sizeof(WNDCLASSEXW);
+    wc.style = CS_HREDRAW | CS_VREDRAW;
+    wc.lpfnWndProc = SelectWindowWndProc;
+    wc.hInstance = hInst;
+    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+    wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+    wc.lpszClassName = L"SelectWindowDialogClass";
+    
+    RegisterClassExW(&wc);
+    
+    HWND hDlg = CreateWindowExW(0, L"SelectWindowDialogClass", L"选择目标窗口",
+        WS_OVERLAPPEDWINDOW & ~WS_MAXIMIZEBOX & ~WS_THICKFRAME,
+        CW_USEDEFAULT, CW_USEDEFAULT, 400, 280,
+        hParent, NULL, hInst, (LPVOID)&windows);
+    
+    if (!hDlg) {
+        wchar_t errMsg[256];
+        wsprintfW(errMsg, L"无法创建对话框，错误码: %d", GetLastError());
+        MessageBoxW(hParent, errMsg, L"错误", MB_OK);
+        return NULL;
+    }
+    
+    ShowWindow(hDlg, SW_SHOW);
+    UpdateWindow(hDlg);
+    
+    MSG msg;
+    while (IsWindow(hDlg) && GetMessageW(&msg, NULL, 0, 0)) {
+        TranslateMessage(&msg);
+        DispatchMessageW(&msg);
+    }
+    
+    HWND result = g_selectedWindow;
+    g_selectedWindow = NULL;
+    return result;
 }
 
 #define WINDOW_WIDTH 570
@@ -57,6 +255,24 @@ int g_currentTabIndex = 0;
 
 void RefreshHotkeyList();
 void SendKeyToWindow(const HotkeyItem& item);
+std::wstring EscapeButtonText(const std::wstring& text);
+
+BOOL CALLBACK EnumChildProc(HWND hWnd, LPARAM lParam) {
+    SendMessageW(hWnd, WM_SETFONT, (WPARAM)g_hFont, TRUE);
+    return TRUE;
+}
+
+std::wstring EscapeButtonText(const std::wstring& text) {
+    std::wstring result;
+    for (wchar_t c : text) {
+        if (c == L'&') {
+            result += L"&&";
+        } else {
+            result += c;
+        }
+    }
+    return result;
+}
 
 LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
     switch (message) {
@@ -108,6 +324,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
         CheckRadioButton(hWnd, ID_CATEGORY_RADIO_START, ID_CATEGORY_RADIO_START + 6, ID_CATEGORY_RADIO_START);
         
         RefreshHotkeyList();
+        
+        EnumChildWindows(hWnd, EnumChildProc, 0);
         break;
     }
     
@@ -115,41 +333,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
         int wmId = LOWORD(wParam);
         
         if (wmId == ID_BTN_SELECT_WINDOW) {
-            g_hTargetWnd = NULL;
-            
-            // 按进程名查找窗口
-            const wchar_t* processNames[] = {
-                L"NetHackW.exe",
-                L"NetHack.exe",
-                L"NetHackW",
-                L"NetHack"
-            };
-            
-            DWORD targetProcessId = 0;
-            
-            // 枚举所有进程，查找目标进程
-            HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-            if (hSnapshot != INVALID_HANDLE_VALUE) {
-                PROCESSENTRY32W pe = {0};
-                pe.dwSize = sizeof(PROCESSENTRY32W);
-                
-                if (Process32FirstW(hSnapshot, &pe)) {
-                    do {
-                        for (size_t i = 0; i < _countof(processNames); i++) {
-                            if (_wcsicmp(pe.szExeFile, processNames[i]) == 0) {
-                                targetProcessId = pe.th32ProcessID;
-                                break;
-                            }
-                        }
-                    } while (targetProcessId == 0 && Process32NextW(hSnapshot, &pe));
-                }
-                CloseHandle(hSnapshot);
-            }
-            
-            // 如果找到了进程，查找该进程的主窗口
-            if (targetProcessId != 0) {
-                g_hTargetWnd = FindWindowByProcessId(targetProcessId);
-            }
+            g_hTargetWnd = ShowWindowSelectionDialog(hWnd, g_hInst);
             
             if (g_hTargetWnd) {
                 wchar_t title[512] = {0};
@@ -157,10 +341,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) 
                 g_targetWindowTitle = title;
                 SetWindowTextW(g_hStaticTarget, title);
             } else {
-                std::wstring msg = L"未找到 NetHack 进程。\n\n";
-                msg += L"请确保 NetHack 游戏正在运行（进程名应为 NetHackW.exe 或 NetHack.exe）";
-                MessageBoxW(g_hMainWnd, msg.c_str(), L"提示", MB_OK);
-                SetWindowTextW(g_hStaticTarget, L"未找到 NetHack 窗口");
+                SetWindowTextW(g_hStaticTarget, L"未选择窗口");
             }
             break;
         }
@@ -252,11 +433,12 @@ void RefreshHotkeyList() {
             hotkeys[i].description.find(g_searchQuery) != std::wstring::npos ||
             hotkeys[i].key.find(g_searchQuery) != std::wstring::npos)) {
             
-            std::wstring text = L"[" + hotkeys[i].key + L"] " + hotkeys[i].description;
-            CreateWindowExW(0, L"BUTTON", text.c_str(),
+            std::wstring text = L"[" + EscapeButtonText(hotkeys[i].key) + L"] " + EscapeButtonText(hotkeys[i].description);
+            HWND hBtn = CreateWindowExW(0, L"BUTTON", text.c_str(),
                 WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON | BS_FLAT,
                 10+col * (btnWidth + 10), y, btnWidth, 30,
                 g_hMainWnd, (HMENU)(ID_HOTKEY_BTN_START + i), g_hInst, NULL);
+            SendMessageW(hBtn, WM_SETFONT, (WPARAM)g_hFont, TRUE);
             
             count++;
             // 交替列
@@ -271,11 +453,12 @@ void RefreshHotkeyList() {
     }
     
     if (count == 0) {
-        CreateWindowExW(0, L"STATIC", 
+        HWND hStatic = CreateWindowExW(0, L"STATIC", 
             g_searchQuery.empty() ? L"没有数据" : L"未找到匹配",
             WS_VISIBLE | WS_CHILD | SS_CENTER,
             15, y, WINDOW_WIDTH - 35, 20,
             g_hMainWnd, (HMENU)ID_STATIC_NO_MATCH, g_hInst, NULL);
+        SendMessageW(hStatic, WM_SETFONT, (WPARAM)g_hFont, TRUE);
     }
 }
 
@@ -360,6 +543,8 @@ void SendKeyToWindow(const HotkeyItem& item) {
 }
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
+    CreateGlobalFont();
+    
     WNDCLASSEXW wc = {0};
     wc.cbSize = sizeof(WNDCLASSEXW);
     wc.style = CS_HREDRAW | CS_VREDRAW;
@@ -368,6 +553,18 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
     wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
     wc.lpszClassName = L"NetHackHelper";
+    
+    // 加载图标
+    wc.hIcon = (HICON)LoadImageW(hInstance, L"IDI_ICON1", IMAGE_ICON, 0, 0, LR_DEFAULTSIZE);
+    wc.hIconSm = (HICON)LoadImageW(hInstance, L"IDI_ICON1", IMAGE_ICON, 16, 16, LR_DEFAULTSIZE);
+    
+    // 如果图标加载失败，使用默认图标
+    if (!wc.hIcon) {
+        wc.hIcon = LoadIcon(NULL, IDI_APPLICATION);
+    }
+    if (!wc.hIconSm) {
+        wc.hIconSm = LoadIcon(NULL, IDI_APPLICATION);
+    }
     
     RegisterClassExW(&wc);
     
@@ -387,5 +584,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         DispatchMessageW(&msg);
     }
     
+    DeleteGlobalFont();
     return (int)msg.wParam;
 }
