@@ -1,2 +1,3 @@
-支持原版Nethack,选择窗口按钮自动识别NetHackW.exe或NetHack.exe
-Windows下没有meta键,部分命令只能通过#运行
+点击选择窗口按钮,手动选择游戏窗口.
+如果需要程序图标,编译时在目录下自己放一个app.ico.
+Windows下没有meta键,部分命令只能通过#运行.
